@@ -1,0 +1,9 @@
+{
+  "name": "CSLatam+",
+  "description": "Plugins de CloudStream para Latinoamérica — Catálogo General, extractores y más.",
+  "iconUrl": "https://github.com/ticolibre.png",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/ticolibre/CSLatam/builds/plugins.json"
+  ]
+}
