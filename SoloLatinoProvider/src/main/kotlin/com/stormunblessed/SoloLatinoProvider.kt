@@ -135,10 +135,14 @@ class SoloLatinoProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         val csrf = doc.selectFirst("meta[name=csrf-token]")?.attr("content") ?: ""
+        // The site's /api/player-url route now rejects requests without an Origin
+        // header (it answers 404), so a plain app.post() from the plugin gets no links.
         val headers = mapOf(
             "Content-Type" to "application/json",
             "X-CSRF-TOKEN" to csrf,
             "Accept" to "application/json",
+            "Origin" to mainUrl,
+            "Referer" to data,
         )
         // Language groups ("mx" -> Latino) each hold their own server buttons
         val langGroups: List<Pair<String, Elements>> = doc.select("div[data-lang-group]")
@@ -157,7 +161,9 @@ class SoloLatinoProvider : MainAPI() {
                     val response = app.post(
                         "$mainUrl/api/player-url",
                         headers = headers,
-                        data = mapOf("t" to token)
+                        // Send a real JSON body: `data = mapOf(...)` in NiceHttp is
+                        // form-encoded, which can corrupt base64 tokens containing '+'.
+                        json = mapOf("t" to token)
                     ).parsedSafe<PlayerResponse>()
                     response?.let { resolved ->
                         val url = resolved.url
@@ -179,6 +185,9 @@ class SoloLatinoProvider : MainAPI() {
                                         loadSourceNameExtractor(groupLang, it, data, subtitleCallback, callback)
                                     }
                             }
+                            // Anti-bot player: its iframe src is injected by JS, so it can't be
+                            // resolved server-side. Skip it instead of returning a dead source.
+                            url.startsWith("https://player.pelisserieshoy.com") -> Unit
                             else -> {
                                 app.get(url).document.selectFirst("iframe")?.attr("src")?.let {
                                     loadSourceNameExtractor(groupLang, it, data, subtitleCallback, callback)
