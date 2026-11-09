@@ -1,6 +1,8 @@
 package com.stormunblessed
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Element
@@ -11,6 +13,12 @@ class SoloLatinoProvider : MainAPI() {
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
     override var lang = "mx"
+
+    // sololatino.net is behind a Cloudflare managed challenge: plain OkHttp
+    // requests get a 403 "Performing security verification" page (0 cards, so
+    // the home screen silently looks empty). This interceptor loads the URL in
+    // a WebView, solves the challenge and retries with the cf_clearance cookie.
+    private val cfKiller = CloudflareKiller()
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val hasDownloadSupport = true
@@ -30,9 +38,16 @@ class SoloLatinoProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val separator = if (request.data.contains("?")) "&" else "?"
-        val document = app.get("$mainUrl/${request.data}${separator}page=$page").document
+        val url = "$mainUrl/${request.data}${separator}page=$page"
+        val response = app.get(url, interceptor = cfKiller)
+        val document = response.document
         val home = document.select("div.card")
             .mapNotNull { it.toSearchResult() }
+        Log.d(
+            "SoloLatino",
+            "getMainPage $url -> ${response.code} server=${response.headers["Server"]} " +
+                "len=${response.text.length} cards=${home.size}"
+        )
         val hasNext = document.selectFirst("a[href*='page=']:contains(›)") != null
         return newHomePageResponse(
             list = HomePageList(
@@ -55,7 +70,7 @@ class SoloLatinoProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/buscar?q=$query").document
+        val document = app.get("$mainUrl/buscar?q=$query", interceptor = cfKiller).document
         val results =
             document.select("div.card").mapNotNull { it.toSearchResult() }
         return results
@@ -72,7 +87,7 @@ class SoloLatinoProvider : MainAPI() {
     )
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
+        val doc = app.get(url, interceptor = cfKiller).document
         val tvType = if (url.contains("/pelicula/")) TvType.Movie else TvType.TvSeries
         val title = doc.selectFirst(".w-44")!!.attr("alt")
         val poster = doc.selectFirst(".w-44")!!.attr("src")
@@ -133,7 +148,7 @@ class SoloLatinoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        val doc = app.get(data, interceptor = cfKiller).document
         val csrf = doc.selectFirst("meta[name=csrf-token]")?.attr("content") ?: ""
         // The site's /api/player-url route now rejects requests without an Origin
         // header (it answers 404), so a plain app.post() from the plugin gets no links.
@@ -163,7 +178,8 @@ class SoloLatinoProvider : MainAPI() {
                         headers = headers,
                         // Send a real JSON body: `data = mapOf(...)` in NiceHttp is
                         // form-encoded, which can corrupt base64 tokens containing '+'.
-                        json = mapOf("t" to token)
+                        json = mapOf("t" to token),
+                        interceptor = cfKiller
                     ).parsedSafe<PlayerResponse>()
                     response?.let { resolved ->
                         val url = resolved.url
